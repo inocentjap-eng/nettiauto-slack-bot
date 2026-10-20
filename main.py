@@ -8,7 +8,7 @@ from urllib.parse import urljoin
 import cloudscraper
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_sync
+from playwright_stealth import Stealth
 
 
 # Configuration
@@ -146,9 +146,9 @@ def send_slack_notification(message):
 # Nettiauto scraper (Playwright + stealth)
 def fetch_listings():
     """Fetch listings using a real browser with stealth to bypass Cloudflare."""
-    with sync_playwright() as p:
+    with Stealth().use_sync(sync_playwright()) as p:
         browser = p.chromium.launch(
-            headless=False,  # headed mode (runs inside Xvfb on CI)
+            headless=False,
             args=[
                 "--no-sandbox",
                 "--disable-blink-features=AutomationControlled",
@@ -169,9 +169,6 @@ def fetch_listings():
         )
         page = context.new_page()
 
-        # Apply stealth patches BEFORE navigation
-        stealth_sync(page)
-
         page.goto(NETTIAUTO_URL, wait_until="domcontentloaded", timeout=30000)
 
         # Wait for Cloudflare challenge to clear
@@ -181,7 +178,6 @@ def fetch_listings():
                 break
             time.sleep(1)
 
-        # Wait for actual content
         try:
             page.wait_for_selector("a.data_box", timeout=20000)
         except Exception:
