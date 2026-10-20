@@ -39,6 +39,7 @@ def gist_headers():
     return {
         "Authorization": f"token {GIST_TOKEN}",
         "Accept": "application/vnd.github+json",
+        "User-Agent": "nettiauto-alert-bot",
     }
 
 
