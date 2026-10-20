@@ -27,8 +27,16 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install playwright cloudscraper beautifulsoup4
+          pip install playwright playwright-stealth cloudscraper beautifulsoup4
           playwright install --with-deps chromium
+
+      - name: Start Xvfb
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 2
+          echo "DISPLAY=:99" >> $GITHUB_ENV
 
       - name: Run Scraper
         env:
