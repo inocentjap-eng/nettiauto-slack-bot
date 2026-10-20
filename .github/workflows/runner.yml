@@ -2,12 +2,20 @@ name: Nettiauto Alert Checker
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # Runs automatically every 15 minutes
-  workflow_dispatch:      # Allows manual trigger from GitHub Actions UI
+    - cron: '*/15 * * * *'   # every 15 minutes (GitHub may delay runs a few minutes)
+  workflow_dispatch:         # manual trigger from the Actions tab
+
+permissions:
+  contents: read             # the job only needs to read the repo
+
+concurrency:
+  group: nettiauto-check     # never run two checks at once (prevents duplicate alerts)
+  cancel-in-progress: false
 
 jobs:
   check-cars:
     runs-on: ubuntu-latest
+    timeout-minutes: 5       # kill a hung run instead of burning minutes
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -15,7 +23,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
 
       - name: Install Dependencies
         run: pip install requests beautifulsoup4
