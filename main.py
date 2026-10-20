@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import cloudscraper 
 from datetime import datetime, timezone
 from urllib.parse import urljoin
 
@@ -138,24 +139,18 @@ def send_slack_notification(message):
 # Nettiauto scraper
 def fetch_listings():
     """Fetch listings and return unique results, newest first."""
-    response = requests.get(
-        NETTIAUTO_URL,
-        impersonate="chrome",
-        timeout=TIMEOUT,
+    scraper = cloudscraper.create_scraper(
+        browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False},
+        delay=5,
     )
+    response = scraper.get(NETTIAUTO_URL, timeout=TIMEOUT)
 
     if response.status_code != 200:
-        print(
-            f"HTTP {response.status_code}, "
-            f"server={response.headers.get('server')}, "
-            f"cf-ray={response.headers.get('cf-ray')}"
-        )
+        print(f"HTTP {response.status_code}")
         print(response.text[:300].replace("\n", " "))
-        raise RuntimeError(
-            f"Failed to fetch page. HTTP status: {response.status_code}"
-        )
+        raise RuntimeError(f"Failed to fetch page. HTTP status: {response.status_code}")
 
-    soup = BeautifulSoup(response.content, "html.parser")
+    soup = BeautifulSoup(response.content, "html.parser") 
     listings = []
     found_ids = set()
 
