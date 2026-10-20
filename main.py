@@ -1,141 +1,161 @@
+import json
 import os
 import sys
-import json
 from datetime import datetime, timezone
 from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
 
-# ==========================================
-# CONFIGURATION
-# ==========================================
+
+# Configuration
 SLACK_WEBHOOK_URL = (os.environ.get("SLACK_WEBHOOK_URL") or "").strip()
 GIST_TOKEN = (os.environ.get("GIST_TOKEN") or "").strip()
 GIST_ID = (os.environ.get("GIST_ID") or "").strip()
 
-DEFAULT_URL = "https://www.nettiauto.com/en/hakutulokset?haku=P2261268007&sortCol=dateCreated&ord=desc"
-NETTIAUTO_URL = os.environ.get("NETTIAUTO_URL") or DEFAULT_URL
+DEFAULT_URL = (
+    "https://www.nettiauto.com/en/hakutulokset"
+    "?haku=P2261268007&sortCol=dateCreated&ord=desc"
+)
+NETTIAUTO_URL = (os.environ.get("NETTIAUTO_URL") or "").strip() or DEFAULT_URL
 
 BASE_URL = "https://www.nettiauto.com"
 GIST_FILENAME = "seen_cars.json"
-MAX_SEEN = 500          # how many listing IDs to remember
-TIMEOUT = 15            # seconds for every HTTP request
-DAILY_STATUS_HOUR_UTC = 8   # send a "still alive" message once a day; set to None to disable
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
-}
+MAX_SEEN = 500
+TIMEOUT = 15
+DAILY_STATUS_HOUR_UTC = 8  # Set to None to disable the daily status message.
 
 
-# ==========================================
-# DATABASE HELPERS (GITHUB GIST)
-# ==========================================
-def _gist_url():
+# GitHub Gist helpers
+def gist_url():
     if not GIST_TOKEN or not GIST_ID:
-        raise RuntimeError("Missing GIST_TOKEN or GIST_ID. Cannot track seen cars safely.")
-    clean_id = GIST_ID.rstrip("/").split("/")[-1]
-    return f"https://api.github.com/gists/{clean_id}"
+        raise RuntimeError("Missing GIST_TOKEN or GIST_ID.")
+
+    clean_gist_id = GIST_ID.rstrip("/").split("/")[-1]
+    return f"https://api.github.com/gists/{clean_gist_id}"
 
 
-def _gist_headers():
-    return {"Authorization": f"token {GIST_TOKEN}", "Accept": "application/vnd.github+json"}
+def gist_headers():
+    return {
+        "Authorization": f"token {GIST_TOKEN}",
+        "Accept": "application/vnd.github+json",
+    }
 
 
 def get_seen_cars():
-    """Return (ordered list of seen IDs, whether this is the first run).
+    """Return (ordered list of seen listing IDs, whether this is the first run)."""
+    response = requests.get(
+        gist_url(),
+        headers=gist_headers(),
+        timeout=TIMEOUT,
+    )
 
-    Raises on any failure so we never mistake an API error for an empty history.
-    """
-    r = requests.get(_gist_url(), headers=_gist_headers(), timeout=TIMEOUT)
-    if r.status_code != 200:
-        print(f"Token length: {len(GIST_TOKEN)}, starts with: {GIST_TOKEN[:4]!r}")
-        raise RuntimeError(f"Gist fetch failed: HTTP {r.status_code} {r.text[:200]}")
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Gist fetch failed: HTTP {response.status_code} "
+            f"{response.text[:200]}"
+        )
 
-    files = r.json().get("files", {})
-    if GIST_FILENAME not in files:
+    files = response.json().get("files", {})
+    gist_file = files.get(GIST_FILENAME)
+
+    if not gist_file:
         return [], True
 
-    content = files[GIST_FILENAME].get("content", "").strip()
+    content = (gist_file.get("content") or "").strip()
     if not content:
         return [], True
 
     try:
         data = json.loads(content)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"{GIST_FILENAME} is not valid JSON: {e}")
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            f"{GIST_FILENAME} contains invalid JSON: {error}"
+        ) from error
 
     if not isinstance(data, list):
         raise RuntimeError(f"{GIST_FILENAME} must contain a JSON list.")
 
-    return [str(x) for x in data], len(data) == 0
+    seen_ids = [str(item) for item in data]
+    return seen_ids, len(seen_ids) == 0
 
 
-def save_seen_cars(seen_list):
-    trimmed = seen_list[-MAX_SEEN:]
-    payload = {"files": {GIST_FILENAME: {"content": json.dumps(trimmed)}}}
-    r = requests.patch(_gist_url(), headers=_gist_headers(), json=payload, timeout=TIMEOUT)
-    r.raise_for_status()
+def save_seen_cars(seen_ids):
+    trimmed_ids = seen_ids[-MAX_SEEN:]
+    payload = {
+        "files": {
+            GIST_FILENAME: {
+                "content": json.dumps(trimmed_ids)
+            }
+        }
+    }
+
+    response = requests.patch(
+        gist_url(),
+        headers=gist_headers(),
+        json=payload,
+        timeout=TIMEOUT,
+    )
+    response.raise_for_status()
 
 
-# ==========================================
-# SLACK
-# ==========================================
-def slack_escape(text):
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+# Slack helpers
+def slack_escape(value):
+    return (
+        str(value)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
 
 
 def send_slack_notification(message):
-    """Return True if the message was delivered (or logged because no webhook is set)."""
+    """Send a Slack message. Return False if delivery fails."""
     if not SLACK_WEBHOOK_URL:
-        print("SLACK_WEBHOOK_URL is not set! Logging message instead:")
+        print("SLACK_WEBHOOK_URL is not set; message will only be logged:")
         print(message)
         return True
+
     try:
-        r = requests.post(SLACK_WEBHOOK_URL, json={"text": message}, timeout=TIMEOUT)
-        if r.status_code != 200:
-            print(f"Slack error: HTTP {r.status_code} {r.text[:200]}")
+        response = requests.post(
+            SLACK_WEBHOOK_URL,
+            json={"text": message},
+            timeout=TIMEOUT,
+        )
+        if response.status_code != 200:
+            print(
+                f"Slack error: HTTP {response.status_code} "
+                f"{response.text[:200]}"
+            )
             return False
         return True
-    except requests.RequestException as e:
-        print(f"Slack request failed: {e}")
+    except requests.RequestException as error:
+        print(f"Slack request failed: {error}")
         return False
 
 
-# ==========================================
-# SCRAPER
-# ==========================================
+# Nettiauto scraper
 def fetch_listings():
-    """Return a list of dicts: id, title, price, link (newest first, de-duplicated)."""
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,fi;q=0.8",
-        "Accept-Encoding": "gzip, deflate",
-        "Referer": "https://www.nettiauto.com/",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "same-origin",
-        "Sec-Fetch-User": "?1",
-    })
+    """Fetch listings and return unique results, newest first."""
+    response = requests.get(
+        NETTIAUTO_URL,
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=TIMEOUT,
+    )
 
-    response = session.get(NETTIAUTO_URL, timeout=TIMEOUT)
     if response.status_code != 200:
-        print(f"HTTP {response.status_code}, server={response.headers.get('server')}, "
-              f"cf-ray={response.headers.get('cf-ray')}")
+        print(
+            f"HTTP {response.status_code}, "
+            f"server={response.headers.get('server')}, "
+            f"cf-ray={response.headers.get('cf-ray')}"
+        )
         print(response.text[:300].replace("\n", " "))
-        raise RuntimeError(f"Failed to fetch page. HTTP status: {response.status_code}")
+        raise RuntimeError(
+            f"Failed to fetch page. HTTP status: {response.status_code}"
+        )
 
     soup = BeautifulSoup(response.content, "html.parser")
-    results = []
+    listings = []
     found_ids = set()
 
     for listing in soup.find_all("a", class_="data_box"):
@@ -144,81 +164,111 @@ def fetch_listings():
             continue
 
         link = urljoin(BASE_URL, href)
-        listing_id = link.split("?")[0].split("#")[0].rstrip("/").split("/")[-1]
+        listing_id = (
+            link.split("?")[0]
+            .split("#")[0]
+            .rstrip("/")
+            .split("/")[-1]
+        )
+
         if not listing_id or listing_id in found_ids:
             continue
+
         found_ids.add(listing_id)
 
-        title_elem = listing.find("div", class_="listing_title")
-        title = title_elem.get_text(strip=True) if title_elem else "Nettiauto Listing"
+        title_element = listing.find("div", class_="listing_title")
+        title = (
+            title_element.get_text(strip=True)
+            if title_element
+            else "Nettiauto Listing"
+        )
 
-        price_elem = listing.find("span", class_="price_val")
-        price = price_elem.get_text(strip=True) if price_elem else "N/A"
+        price_element = listing.find("span", class_="price_val")
+        price = (
+            price_element.get_text(strip=True)
+            if price_element
+            else "N/A"
+        )
 
-        results.append({"id": listing_id, "title": title, "price": price, "link": link})
+        listings.append(
+            {
+                "id": listing_id,
+                "title": title,
+                "price": price,
+                "link": link,
+            }
+        )
 
-    return results
+    return listings
 
 
-# ==========================================
-# MAIN
-# ==========================================
+# Main
 def main():
-    seen, first_run = get_seen_cars()
-    seen_set = set(seen)
+    seen_ids, first_run = get_seen_cars()
+    seen_set = set(seen_ids)
 
     print(f"Fetching listings from: {NETTIAUTO_URL}")
     listings = fetch_listings()
 
     if not listings:
-        # Most likely the HTML changed or the site is blocking us.
-        # Exiting non-zero makes GitHub mark the run as failed (and email you).
         send_slack_notification(
-            "⚠️ *Nettiauto Check:* 0 listings parsed. The site layout may have changed or is blocking us."
+            "⚠️ *Nettiauto Check:* 0 listings parsed. "
+            "The site layout may have changed or may be blocking the request."
         )
         print("No listings parsed from page.")
         sys.exit(1)
 
-    new_listings = [l for l in listings if l["id"] not in seen_set]
+    new_listings = [
+        item for item in listings
+        if item["id"] not in seen_set
+    ]
 
-    # First run: remember everything silently so you don't get a flood.
+    # Seed existing listings on the first run without sending a flood of alerts.
     if first_run:
-        save_seen_cars([l["id"] for l in reversed(listings)])
+        save_seen_cars([item["id"] for item in reversed(listings)])
         send_slack_notification(
-            f"✅ *Nettiauto Alerts initialized.* Tracking {len(listings)} existing listings. "
-            "You'll be notified about new ones from now on."
+            f"✅ *Nettiauto Alerts initialized.* Tracking {len(listings)} "
+            "existing listings. You'll be notified about new ones from now on."
         )
         print(f"First run: seeded {len(listings)} listings.")
         return
 
-    # Notify oldest-first so Slack reads chronologically.
     changed = False
+
+    # Send oldest first so Slack messages appear in chronological order.
     for item in reversed(new_listings):
-        msg = (
-            f"🚨 *New Nettiauto Match!*\n"
+        message = (
+            "🚨 *New Nettiauto Match!*\n"
             f"*{slack_escape(item['title'])}*\n"
             f"💰 *Price:* {slack_escape(item['price'])}\n"
             f"🔗 <{item['link']}|View Listing>"
         )
-        # Only mark as seen if Slack accepted it, otherwise retry next run.
-        if send_slack_notification(msg):
-            seen.append(item["id"])
+
+        # Save only successful notifications so failed sends can be retried.
+        if send_slack_notification(message):
+            seen_ids.append(item["id"])
             changed = True
             print(f"Notification sent: {item['title']} ({item['id']})")
         else:
-            print(f"Slack failed for {item['id']}; will retry next run.")
+            print(f"Slack failed for {item['id']}; it will retry next run.")
 
     if changed:
-        save_seen_cars(seen)
+        save_seen_cars(seen_ids)
         return
 
-    print("No new listings found in this run.")
+    if not new_listings:
+        print("No new listings found in this run.")
 
-    now = datetime.now(timezone.utc)
-    if DAILY_STATUS_HOUR_UTC is not None and now.hour == DAILY_STATUS_HOUR_UTC and now.minute < 15:
-        send_slack_notification(
-            f"ℹ️ *Nettiauto Check:* still running, no new cars (page shows {len(listings)} listings)."
-        )
+        now = datetime.now(timezone.utc)
+        if (
+            DAILY_STATUS_HOUR_UTC is not None
+            and now.hour == DAILY_STATUS_HOUR_UTC
+            and now.minute < 15
+        ):
+            send_slack_notification(
+                "ℹ️ *Nettiauto Check:* still running, no new cars "
+                f"(page shows {len(listings)} listings)."
+            )
 
 
 if __name__ == "__main__":
