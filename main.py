@@ -1,12 +1,14 @@
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from urllib.parse import urljoin
 
 import cloudscraper
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
+from playwright_stealth import stealth_sync
 
 
 # Configuration
@@ -24,7 +26,7 @@ BASE_URL = "https://www.nettiauto.com"
 GIST_FILENAME = "seen_cars.json"
 MAX_SEEN = 500
 TIMEOUT = 15
-DAILY_STATUS_HOUR_UTC = 8  # Set to None to disable the daily status message.
+DAILY_STATUS_HOUR_UTC = 8
 
 # Shared HTTP session for Gist + Slack calls
 http = cloudscraper.create_scraper(
@@ -141,15 +143,18 @@ def send_slack_notification(message):
         return False
 
 
-# Nettiauto scraper (Playwright)
+# Nettiauto scraper (Playwright + stealth)
 def fetch_listings():
-    """Fetch listings using a real browser to bypass Cloudflare JS challenges."""
+    """Fetch listings using a real browser with stealth to bypass Cloudflare."""
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=True,
+            headless=False,  # headed mode (runs inside Xvfb on CI)
             args=[
                 "--no-sandbox",
                 "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--disable-setuid-sandbox",
+                "--window-size=1920,1080",
             ],
         )
         context = browser.new_context(
@@ -160,18 +165,33 @@ def fetch_listings():
             ),
             viewport={"width": 1920, "height": 1080},
             locale="en-US",
+            timezone_id="Europe/Helsinki",
         )
         page = context.new_page()
+
+        # Apply stealth patches BEFORE navigation
+        stealth_sync(page)
+
         page.goto(NETTIAUTO_URL, wait_until="domcontentloaded", timeout=30000)
 
         # Wait for Cloudflare challenge to clear
+        for attempt in range(15):
+            title = page.title().lower()
+            if "just a moment" not in title and "checking your browser" not in title:
+                break
+            time.sleep(1)
+
+        # Wait for actual content
         try:
             page.wait_for_selector("a.data_box", timeout=20000)
         except Exception:
-            print("Challenge page detected, waiting and retrying...")
-            page.wait_for_timeout(10000)
-            page.reload(wait_until="domcontentloaded")
-            page.wait_for_selector("a.data_box", timeout=15000)
+            print("Still blocked. Taking screenshot for debugging...")
+            page.screenshot(path="debug_block.png")
+            print(f"Page title: {page.title()}")
+            print(f"Page URL: {page.url}")
+            print(page.content()[:500])
+            browser.close()
+            raise RuntimeError("Cloudflare challenge did not clear.")
 
         html = page.content()
         browser.close()
@@ -245,7 +265,6 @@ def main():
         if item["id"] not in seen_set
     ]
 
-    # Seed existing listings on the first run without sending a flood of alerts.
     if first_run:
         save_seen_cars([item["id"] for item in reversed(listings)])
         send_slack_notification(
@@ -257,7 +276,6 @@ def main():
 
     changed = False
 
-    # Send oldest first so Slack messages appear in chronological order.
     for item in reversed(new_listings):
         message = (
             "🚨 *New Nettiauto Match!*\n"
