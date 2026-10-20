@@ -110,8 +110,28 @@ def send_slack_notification(message):
 # ==========================================
 def fetch_listings():
     """Return a list of dicts: id, title, price, link (newest first, de-duplicated)."""
-    response = requests.get(NETTIAUTO_URL, headers=HEADERS, timeout=TIMEOUT)
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,fi;q=0.8",
+        "Accept-Encoding": "gzip, deflate",
+        "Referer": "https://www.nettiauto.com/",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+    })
+
+    response = session.get(NETTIAUTO_URL, timeout=TIMEOUT)
     if response.status_code != 200:
+        print(f"HTTP {response.status_code}, server={response.headers.get('server')}, "
+              f"cf-ray={response.headers.get('cf-ray')}")
+        print(response.text[:300].replace("\n", " "))
         raise RuntimeError(f"Failed to fetch page. HTTP status: {response.status_code}")
 
     soup = BeautifulSoup(response.content, "html.parser")
