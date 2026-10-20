@@ -10,9 +10,9 @@ from bs4 import BeautifulSoup
 # ==========================================
 # CONFIGURATION
 # ==========================================
-SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
-GIST_TOKEN = os.environ.get("GIST_TOKEN")
-GIST_ID = os.environ.get("GIST_ID")
+SLACK_WEBHOOK_URL = (os.environ.get("SLACK_WEBHOOK_URL") or "").strip()
+GIST_TOKEN = (os.environ.get("GIST_TOKEN") or "").strip()
+GIST_ID = (os.environ.get("GIST_ID") or "").strip()
 
 DEFAULT_URL = "https://www.nettiauto.com/en/hakutulokset?haku=P2261268007&sortCol=dateCreated&ord=desc"
 NETTIAUTO_URL = os.environ.get("NETTIAUTO_URL") or DEFAULT_URL
@@ -51,8 +51,9 @@ def get_seen_cars():
     Raises on any failure so we never mistake an API error for an empty history.
     """
     r = requests.get(_gist_url(), headers=_gist_headers(), timeout=TIMEOUT)
-    if r.status_code != 200:
-        raise RuntimeError(f"Gist fetch failed: HTTP {r.status_code}")
+        if r.status_code != 200:
+        print(f"Token length: {len(GIST_TOKEN)}, starts with: {GIST_TOKEN[:4]!r}")
+        raise RuntimeError(f"Gist fetch failed: HTTP {r.status_code} {r.text[:200]}")
 
     files = r.json().get("files", {})
     if GIST_FILENAME not in files:
