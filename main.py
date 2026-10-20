@@ -4,7 +4,7 @@ import sys
 from datetime import datetime, timezone
 from urllib.parse import urljoin
 
-import requests
+from curl_cffi import requests
 from bs4 import BeautifulSoup
 
 
@@ -139,7 +139,7 @@ def fetch_listings():
     """Fetch listings and return unique results, newest first."""
     response = requests.get(
         NETTIAUTO_URL,
-        headers={"User-Agent": "Mozilla/5.0"},
+        impersonate="chrome",
         timeout=TIMEOUT,
     )
 
@@ -272,4 +272,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()   
