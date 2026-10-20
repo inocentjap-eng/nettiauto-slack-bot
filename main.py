@@ -51,7 +51,7 @@ def get_seen_cars():
     Raises on any failure so we never mistake an API error for an empty history.
     """
     r = requests.get(_gist_url(), headers=_gist_headers(), timeout=TIMEOUT)
-        if r.status_code != 200:
+    if r.status_code != 200:
         print(f"Token length: {len(GIST_TOKEN)}, starts with: {GIST_TOKEN[:4]!r}")
         raise RuntimeError(f"Gist fetch failed: HTTP {r.status_code} {r.text[:200]}")
 
