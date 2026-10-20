@@ -26,8 +26,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Dependencies
-        run: pip install curl_cffi beautifulsoup4
-        run: pip install cloudscraper beautifulsoup4
+        run: pip install curl_cffi cloudscraper beautifulsoup4
 
       - name: Run Scraper
         env:
