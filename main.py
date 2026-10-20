@@ -1,12 +1,12 @@
 import json
 import os
 import sys
-import cloudscraper 
 from datetime import datetime, timezone
 from urllib.parse import urljoin
 
-from curl_cffi import requests
+import cloudscraper
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
 
 # Configuration
@@ -46,7 +46,7 @@ def gist_headers():
 
 def get_seen_cars():
     """Return (ordered list of seen listing IDs, whether this is the first run)."""
-    response = requests.get(
+    response = cloudscraper.get(
         gist_url(),
         headers=gist_headers(),
         timeout=TIMEOUT,
@@ -92,7 +92,7 @@ def save_seen_cars(seen_ids):
         }
     }
 
-    response = requests.patch(
+    response = cloudscraper.patch(
         gist_url(),
         headers=gist_headers(),
         json=payload,
@@ -119,7 +119,7 @@ def send_slack_notification(message):
         return True
 
     try:
-        response = requests.post(
+        response = cloudscraper.post(
             SLACK_WEBHOOK_URL,
             json={"text": message},
             timeout=TIMEOUT,
@@ -131,26 +131,47 @@ def send_slack_notification(message):
             )
             return False
         return True
-    except requests.RequestException as error:
+    except Exception as error:
         print(f"Slack request failed: {error}")
         return False
 
 
-# Nettiauto scraper
+# Nettiauto scraper (Playwright)
 def fetch_listings():
-    """Fetch listings and return unique results, newest first."""
-    scraper = cloudscraper.create_scraper(
-        browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False},
-        delay=5,
-    )
-    response = scraper.get(NETTIAUTO_URL, timeout=TIMEOUT)
+    """Fetch listings using a real browser to bypass Cloudflare JS challenges."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-blink-features=AutomationControlled",
+            ],
+        )
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1920, "height": 1080},
+            locale="en-US",
+        )
+        page = context.new_page()
+        page.goto(NETTIAUTO_URL, wait_until="domcontentloaded", timeout=30000)
 
-    if response.status_code != 200:
-        print(f"HTTP {response.status_code}")
-        print(response.text[:300].replace("\n", " "))
-        raise RuntimeError(f"Failed to fetch page. HTTP status: {response.status_code}")
+        # Wait for Cloudflare challenge to clear
+        try:
+            page.wait_for_selector("a.data_box", timeout=20000)
+        except Exception:
+            print("Challenge page detected, waiting and retrying...")
+            page.wait_for_timeout(10000)
+            page.reload(wait_until="domcontentloaded")
+            page.wait_for_selector("a.data_box", timeout=15000)
 
-    soup = BeautifulSoup(response.content, "html.parser") 
+        html = page.content()
+        browser.close()
+
+    soup = BeautifulSoup(html, "html.parser")
     listings = []
     found_ids = set()
 
@@ -240,7 +261,6 @@ def main():
             f"🔗 <{item['link']}|View Listing>"
         )
 
-        # Save only successful notifications so failed sends can be retried.
         if send_slack_notification(message):
             seen_ids.append(item["id"])
             changed = True
