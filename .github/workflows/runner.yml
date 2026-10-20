@@ -26,7 +26,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Dependencies
-        run: pip install requests beautifulsoup4
+        run: pip install curl_cffi beautifulsoup4
 
       - name: Run Scraper
         env:
@@ -34,4 +34,4 @@ jobs:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
           GIST_ID: ${{ secrets.GIST_ID }}
           NETTIAUTO_URL: ${{ secrets.NETTIAUTO_URL }}
-        run: python main.py
+        run: python main.py   
