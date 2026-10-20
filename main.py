@@ -26,6 +26,11 @@ MAX_SEEN = 500
 TIMEOUT = 15
 DAILY_STATUS_HOUR_UTC = 8  # Set to None to disable the daily status message.
 
+# Shared HTTP session for Gist + Slack calls
+http = cloudscraper.create_scraper(
+    browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False},
+)
+
 
 # GitHub Gist helpers
 def gist_url():
@@ -46,7 +51,7 @@ def gist_headers():
 
 def get_seen_cars():
     """Return (ordered list of seen listing IDs, whether this is the first run)."""
-    response = cloudscraper.get(
+    response = http.get(
         gist_url(),
         headers=gist_headers(),
         timeout=TIMEOUT,
@@ -92,7 +97,7 @@ def save_seen_cars(seen_ids):
         }
     }
 
-    response = cloudscraper.patch(
+    response = http.patch(
         gist_url(),
         headers=gist_headers(),
         json=payload,
@@ -119,7 +124,7 @@ def send_slack_notification(message):
         return True
 
     try:
-        response = cloudscraper.post(
+        response = http.post(
             SLACK_WEBHOOK_URL,
             json={"text": message},
             timeout=TIMEOUT,
